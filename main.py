@@ -1,5 +1,6 @@
 import os
 import csv
+import argparse
 from enum import Enum
 from typing import List, Dict, Any
 from pydantic import BaseModel
@@ -9,9 +10,34 @@ import pandas as pd
 
 load_dotenv()
 
-# システムプロンプトの設定
-SYSTEM_PROMPT = """あなたは与えられたデータを適切なカテゴリに分類する専門家です。
-データの内容を分析し、最も適切なカテゴリタグを選択してください。
+# 分類対象のカテゴリ定義
+DEFAULT_CATEGORIES = {
+    "TECHNOLOGY": "技術、IT、プログラミング、AI関連",
+    "BUSINESS": "ビジネス、経営、マーケティング関連", 
+    "FINANCE": "金融、投資、経済関連",
+    "HEALTH": "健康、医療、フィットネス関連",
+    "EDUCATION": "教育、学習、研修関連",
+    "ENTERTAINMENT": "エンターテイメント、映画、音楽関連",
+    "SPORTS": "スポーツ、運動、競技関連",
+    "POLITICS": "政治、政策、社会問題関連",
+    "SCIENCE": "科学、研究、学術関連",
+    "OTHER": "その他のカテゴリ"
+}
+
+def create_category_enum(categories: dict):
+    """動的にCategoryTagを生成"""
+    return Enum('CategoryTag', {key: key.lower() for key in categories.keys()}, type=str)
+
+def generate_system_prompt(categories: dict) -> str:
+    """カテゴリ情報を含むシステムプロンプトを生成"""
+    category_list = "\n".join([f"- {key}: {desc}" for key, desc in categories.items()])
+    
+    return f"""あなたは与えられたデータを適切なカテゴリに分類する専門家です。
+データの内容を分析し、以下のカテゴリから最も適切なものを選択してください。
+
+利用可能なカテゴリ:
+{category_list}
+
 分類の際は以下の点を考慮してください：
 - データの主要なテーマや内容
 - キーワードの関連性
@@ -19,17 +45,9 @@ SYSTEM_PROMPT = """あなたは与えられたデータを適切なカテゴリ�
 信頼度は0.0から1.0の範囲で、分類の確実性を表してください。
 理由は分類の根拠を簡潔に説明してください。"""
 
-class CategoryTag(str, Enum):
-    TECHNOLOGY = "technology"
-    BUSINESS = "business"
-    FINANCE = "finance"
-    HEALTH = "health"
-    EDUCATION = "education"
-    ENTERTAINMENT = "entertainment"
-    SPORTS = "sports"
-    POLITICS = "politics"
-    SCIENCE = "science"
-    OTHER = "other"
+# デフォルトのカテゴリとプロンプト
+CategoryTag = create_category_enum(DEFAULT_CATEGORIES)
+SYSTEM_PROMPT = generate_system_prompt(DEFAULT_CATEGORIES)
 
 class TaggedRow(BaseModel):
     category: CategoryTag
@@ -37,8 +55,17 @@ class TaggedRow(BaseModel):
     reason: str
 
 class CSVClassifier:
-    def __init__(self, api_key: str = None, system_prompt: str = None):
-        self.system_prompt = system_prompt or SYSTEM_PROMPT
+    def __init__(self, api_key: str = None, system_prompt: str = None, categories: dict = None):
+        # カスタムカテゴリが指定された場合はプロンプトとEnumを再生成
+        if categories is not None:
+            self.categories = categories
+            self.system_prompt = generate_system_prompt(categories)
+            self.category_enum = create_category_enum(categories)
+        else:
+            self.categories = DEFAULT_CATEGORIES
+            self.system_prompt = system_prompt or SYSTEM_PROMPT
+            self.category_enum = CategoryTag
+        
         self.model = os.getenv("MODEL_NAME", "gpt-4o-2024-08-06")
         
         # Azure OpenAI Serviceの設定確認
@@ -60,7 +87,7 @@ class CSVClassifier:
     def read_csv(self, file_path: str) -> pd.DataFrame:
         return pd.read_csv(file_path)
     
-    def classify_row(self, row_data: Dict[str, Any]) -> TaggedRow:
+    def classify_row(self, row_data: Dict[str, Any]):
         row_text = " ".join([f"{k}: {v}" for k, v in row_data.items()])
         
         messages = [
@@ -68,10 +95,19 @@ class CSVClassifier:
             {"role": "user", "content": f"以下のデータを分類してください：\n{row_text}"}
         ]
         
+        # 動的にTaggedRowクラスを生成
+        from pydantic import create_model
+        TaggedRowDynamic = create_model(
+            'TaggedRow',
+            category=(self.category_enum, ...),
+            confidence=(float, ...),
+            reason=(str, ...)
+        )
+        
         completion = self.client.beta.chat.completions.parse(
             model=self.model,
             messages=messages,
-            response_format=TaggedRow,
+            response_format=TaggedRowDynamic,
         )
         
         return completion.choices[0].message.parsed
@@ -103,10 +139,23 @@ class CSVClassifier:
         return output_df
 
 def main():
+    parser = argparse.ArgumentParser(description='CSV分類ツール')
+    parser.add_argument('input_file', nargs='?', help='入力CSVファイルのパス')
+    parser.add_argument('-o', '--output', help='出力CSVファイルのパス')
+    parser.add_argument('--interactive', action='store_true', help='インタラクティブモードで実行')
+    
+    args = parser.parse_args()
+    
     classifier = CSVClassifier()
     
-    csv_file = input("CSVファイルのパスを入力してください: ")
-    output_file = input("出力ファイルのパス（省略可）: ") or None
+    if args.interactive or not args.input_file:
+        # インタラクティブモード
+        csv_file = input("CSVファイルのパスを入力してください: ")
+        output_file = input("出力ファイルのパス（省略可）: ") or None
+    else:
+        # コマンドライン引数モード
+        csv_file = args.input_file
+        output_file = args.output
     
     try:
         result = classifier.process_csv(csv_file, output_file)

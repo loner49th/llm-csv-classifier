@@ -4,8 +4,9 @@ OpenAI APIのStructured Outputsを使用してCSVファイルの各行を自動�
 
 ## 機能
 
-- CSVファイルの各行を10種類のカテゴリに自動分類
-- OpenAI APIのStructured Outputsによる高精度な分類
+- CSVファイルの各行を自動分類（デフォルト：10種類のカテゴリ）
+- OpenAI API または Azure OpenAI ServiceのStructured Outputsによる高精度な分類
+- 動的カテゴリ定義対応（カテゴリの追加・変更が簡単）
 - 分類理由と信頼度スコア付き
 - 結果をCSVファイルに出力可能
 
@@ -44,8 +45,19 @@ MODEL_NAME=your-deployment-name
 
 ## 使用方法
 
+### コマンドライン引数で実行（推奨）
 ```bash
-uv run python main.py
+uv run python main.py input.csv -o output.csv
+```
+
+### ヘルプの表示
+```bash
+uv run python main.py --help
+```
+
+### インタラクティブモード
+```bash
+uv run python main.py --interactive
 ```
 
 プログラムが以下を求めます:
@@ -69,25 +81,36 @@ uv run python main.py
 
 ### カテゴリのカスタマイズ
 
-独自のカテゴリを使用したい場合は、`main.py`の`CategoryTag`クラスを編集してください：
+#### 方法1: プログラム実行時に指定（推奨）
 
 ```python
-class CategoryTag(str, Enum):
-    CATEGORY1 = "category1"
-    CATEGORY2 = "category2"
-    # 必要に応じてカテゴリを追加・変更
+from main import CSVClassifier
+
+custom_categories = {
+    "URGENT": "緊急性の高いタスク",
+    "NORMAL": "通常のタスク", 
+    "LOW": "優先度の低いタスク"
+}
+
+classifier = CSVClassifier(categories=custom_categories)
+result = classifier.process_csv("input.csv", "output.csv")
 ```
+
+#### 方法2: DEFAULT_CATEGORIESを編集
+
+`main.py`の`DEFAULT_CATEGORIES`辞書を直接編集：
+
+```python
+DEFAULT_CATEGORIES = {
+    "CATEGORY1": "カテゴリ1の説明",
+    "CATEGORY2": "カテゴリ2の説明",
+    "CATEGORY3": "カテゴリ3の説明"
+}
+```
+
+**注意**: カテゴリを変更した場合、EnumとPydanticモデルは自動的に動的生成されるため、手動でEnumクラスを編集する必要はありません。
 
 ### システムプロンプトのカスタマイズ
-
-分類の精度を向上させるために、`main.py`の`SYSTEM_PROMPT`変数を編集できます：
-
-```python
-SYSTEM_PROMPT = """あなたのカスタムプロンプトをここに記載
-分類ルールや期待する動作を詳細に説明してください。"""
-```
-
-また、プログラム実行時に独自のプロンプトを指定することも可能です：
 
 ```python
 classifier = CSVClassifier(system_prompt="カスタムプロンプト")
